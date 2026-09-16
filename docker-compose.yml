@@ -1,0 +1,20 @@
+# Deployed on omv at /root/meds/docker-compose.yml, behind Caddy as meds.omv.deknudtcallens.be
+services:
+  meds:
+    image: ghcr.io/tionkje/meds:latest
+    container_name: meds
+    restart: unless-stopped
+    ports:
+      - '3003:3000'
+    volumes:
+      - meds-data:/app/data
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://localhost:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  meds-data:
+    name: meds-data
