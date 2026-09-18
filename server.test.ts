@@ -18,7 +18,7 @@ after(() => server.close());
 async function call(method: string, path: string, body?: unknown): Promise<Response> {
   return fetch(base + path, { method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
 }
-type State = { pills: { id: number; name: string; hidden: number }[]; doses: { id: string; pill_id: number; taken_at: string }[] };
+type State = { pills: { id: number; name: string; hidden: number }[]; doses: { id: string; pill_id: number; taken_at: string; quantity: number }[] };
 const state = async (): Promise<State> => (await call('GET', '/api/state')).json() as Promise<State>;
 
 test('pill + dose flow, idempotent dose, rename follows history, csv', async () => {
@@ -29,7 +29,12 @@ test('pill + dose flow, idempotent dose, rename follows history, csv', async () 
   assert.equal((await call('POST', '/api/doses', dose)).status, 201);
   assert.equal((await call('POST', '/api/doses', dose)).status, 201); // offline-queue retry
   assert.equal((await state()).doses.length, 1);
+  assert.equal((await state()).doses[0].quantity, 1);
+  await call('POST', '/api/doses', { ...dose, quantity: 2 }); // repeat tap within merge window = same id, higher quantity
+  assert.equal((await state()).doses[0].quantity, 2);
   assert.equal((await call('POST', '/api/doses', { id: 'x', pill_id: id, taken_at: 'nope' })).status, 400);
+  assert.equal((await call('POST', '/api/doses', { ...dose, quantity: 0 })).status, 400);
+  assert.equal((await call('PATCH', '/api/doses/uuid-1', {})).status, 400);
 
   await call('PATCH', `/api/pills/${id}`, { name: 'Dafalgan', hidden: true });
   const s = await state();
@@ -40,7 +45,7 @@ test('pill + dose flow, idempotent dose, rename follows history, csv', async () 
   assert.equal((await state()).doses[0].taken_at, '2026-09-16T11:30:00.000Z');
 
   const csv = await (await call('GET', '/export.csv')).text();
-  assert.equal(csv, 'date,time,pill\n2026-09-16,13:30,"Dafalgan"\n'); // TZ=Europe/Brussels (CEST)
+  assert.equal(csv, 'date,time,pill,quantity\n2026-09-16,13:30,"Dafalgan",2\n'); // TZ=Europe/Brussels (CEST)
 
   await call('DELETE', '/api/doses/uuid-1');
   assert.equal((await state()).doses.length, 0);

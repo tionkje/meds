@@ -27,6 +27,8 @@
   h2 { font-size: .85rem; opacity: .6; margin: 18px 0 6px; text-transform: uppercase; letter-spacing: .05em; }
   .dose { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
   .dose .name { flex: 1; }
+  .dose .qty { width: 3.2em; text-align: center; }
+  .dose .x { opacity: .6; margin-left: -6px; }
   .dose .pending { opacity: .6; font-size: .8rem; }
   .status { font-size: .8rem; opacity: .7; }
   footer { margin: 24px 0; font-size: .85rem; display: flex; gap: 14px; justify-content: center; opacity: .8; }
@@ -49,8 +51,11 @@ const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; 
 const save = (k, v) => localStorage.setItem(k, JSON.stringify(v));
 
 let state = load('state', { pills: [], doses: [] });
-let queue = load('queue', []);       // pending dose POSTs
+let queue = load('queue', []);       // pending dose upserts
+for (const d of state.doses) d.quantity ??= 1; // cache written by the pre-quantity version
 let editing = false;
+const MERGE_MS = 10 * 60e3; // repeat tap on the same pill within this window bumps quantity instead of adding a dose
+let order = {}; // ponytail: pill order frozen per visit so a tap doesn't reshuffle the buttons under your finger
 let showAll = false;
 let online = navigator.onLine;
 
@@ -93,11 +98,16 @@ async function flush() {
   await refresh();
 }
 
-// ponytail: doses are append-only, so an offline tap = local insert + queued POST with a client uuid
+// ponytail: an offline tap = local insert/bump + queued upsert with a client uuid; the queue always carries the full dose
 function logDose(pill_id) {
-  const dose = { id: crypto.randomUUID(), pill_id, taken_at: new Date().toISOString() };
-  state.doses.unshift(dose); save('state', state);
-  queue.push(dose); save('queue', queue);
+  const now = Date.now();
+  let dose = state.doses.find((d) => d.pill_id === pill_id && Math.abs(now - Date.parse(d.taken_at)) < MERGE_MS);
+  if (dose) dose.quantity += 1;
+  else { dose = { id: crypto.randomUUID(), pill_id, taken_at: new Date(now).toISOString(), quantity: 1 }; state.doses.unshift(dose); }
+  save('state', state);
+  const q = queue.find((q) => q.id === dose.id);
+  if (q) q.quantity = dose.quantity; else queue.push({ ...dose });
+  save('queue', queue);
   render();
   flush();
 }
@@ -108,7 +118,8 @@ function render() {
   const today = dayKey(new Date().toISOString());
   const lastUse = {};
   for (const d of state.doses) lastUse[d.pill_id] = Math.max(lastUse[d.pill_id] ?? 0, Date.parse(d.taken_at));
-  const pills = state.pills.filter((p) => editing || !p.hidden).sort((a, b) => (lastUse[b.id] ?? 0) - (lastUse[a.id] ?? 0));
+  for (const p of state.pills) order[p.id] ??= lastUse[p.id] ?? 0;
+  const pills = state.pills.filter((p) => editing || !p.hidden).sort((a, b) => order[b.id] - order[a.id]);
 
   const pillsEl = $('pills'); pillsEl.replaceChildren();
   for (const p of pills) {
@@ -124,9 +135,9 @@ function render() {
     const todays = state.doses.filter((d) => d.pill_id === p.id && dayKey(d.taken_at) === today).sort((a, b) => a.taken_at.localeCompare(b.taken_at));
     const b = el('button', 'pill');
     const left = el('span'); left.textContent = p.name;
-    const times = el('span', 'times', todays.map((d) => timeStr(d.taken_at)).join(' · ') || 'none today');
+    const times = el('span', 'times', todays.map((d) => timeStr(d.taken_at) + (d.quantity > 1 ? ` ×${d.quantity}` : '')).join(' · ') || 'none today');
     left.append(times);
-    b.append(left, el('span', 'count', String(todays.length)));
+    b.append(left, el('span', 'count', String(todays.reduce((n, d) => n + d.quantity, 0))));
     b.onclick = () => logDose(p.id);
     pillsEl.append(b);
   }
@@ -154,11 +165,13 @@ function render() {
       const dt = new Date(d.taken_at); dt.setHours(h, m);
       api('PATCH', `/api/doses/${d.id}`, { taken_at: dt.toISOString() }).then(refresh).catch(fail);
     };
+    const qty = el('input', 'qty'); qty.type = 'number'; qty.min = 1; qty.value = d.quantity; qty.disabled = t.disabled;
+    qty.onchange = () => api('PATCH', `/api/doses/${d.id}`, { quantity: Number(qty.value) }).then(refresh).catch(fail);
     const name = el('span', 'name', pillById[d.pill_id]?.name ?? '?');
     if (isPending(d.id)) name.append(' ', el('span', 'pending', '(not synced)'));
-    const del = el('button', 'small', 'delete'); del.disabled = !online || isPending(d.id);
+    const del = el('button', 'small', 'delete'); del.disabled = t.disabled;
     del.onclick = () => api('DELETE', `/api/doses/${d.id}`).then(refresh).catch(fail);
-    row.append(t, name, del); hist.append(row);
+    row.append(t, qty, el('span', 'x', '×'), name, del); hist.append(row);
   }
   $('showAll').textContent = showAll ? 'show last 7 days' : 'show all';
 }
@@ -170,7 +183,7 @@ $('toggleEdit').onclick = () => { editing = !editing; render(); };
 $('showAll').onclick = (e) => { e.preventDefault(); showAll = !showAll; render(); };
 addEventListener('online', flush);
 addEventListener('offline', () => { setOnline(false); render(); });
-document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && flush());
+document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') return; order = {}; flush(); });
 
 render();
 flush();

@@ -13,7 +13,7 @@ const STATIC: Record<string, string> = {
 const MIME: Record<string, string> = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'application/json', '.svg': 'image/svg+xml' };
 
 type Pill = { id: number; name: string; hidden: number };
-type Dose = { id: string; pill_id: number; taken_at: string };
+type Dose = { id: string; pill_id: number; taken_at: string; quantity: number };
 
 export function openDb(file: string): DatabaseSync {
   const db = new DatabaseSync(file);
@@ -28,6 +28,9 @@ export function openDb(file: string): DatabaseSync {
     );
     CREATE INDEX IF NOT EXISTS doses_taken_at ON doses(taken_at);
   `);
+  // ponytail: single hand-rolled migration; switch to a versioned list when there's a second one
+  const cols = db.prepare('PRAGMA table_info(doses)').all() as { name: string }[];
+  if (!cols.some((c) => c.name === 'quantity')) db.exec('ALTER TABLE doses ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1');
   return db;
 }
 
@@ -46,15 +49,19 @@ function isIso(v: unknown): v is string {
   return typeof v === 'string' && !Number.isNaN(Date.parse(v));
 }
 
+function isQty(v: unknown): v is number {
+  return Number.isInteger(v) && (v as number) >= 1;
+}
+
 export function toCsv(db: DatabaseSync): string {
   const rows = db
-    .prepare('SELECT d.taken_at, p.name FROM doses d JOIN pills p ON p.id = d.pill_id ORDER BY d.taken_at')
-    .all() as { taken_at: string; name: string }[];
+    .prepare('SELECT d.taken_at, d.quantity, p.name FROM doses d JOIN pills p ON p.id = d.pill_id ORDER BY d.taken_at')
+    .all() as { taken_at: string; quantity: number; name: string }[];
   const fmt = new Intl.DateTimeFormat('sv-SE', { timeZone: TZ, dateStyle: 'short', timeStyle: 'short' });
   const esc = (s: string): string => `"${s.replaceAll('"', '""')}"`;
-  return ['date,time,pill', ...rows.map((r) => {
+  return ['date,time,pill,quantity', ...rows.map((r) => {
     const [date, time] = fmt.format(new Date(r.taken_at)).split(' ');
-    return `${date},${time},${esc(r.name)}`;
+    return `${date},${time},${esc(r.name)},${r.quantity}`;
   })].join('\n') + '\n';
 }
 
@@ -94,17 +101,20 @@ export function createApp(db: DatabaseSync): http.Server {
         return send(res, 200, {});
       }
       if (m === 'POST' && p === '/api/doses') {
-        const { id, pill_id, taken_at } = await readJson(req);
-        if (typeof id !== 'string' || typeof pill_id !== 'number' || !isIso(taken_at)) return send(res, 400, { error: 'id, pill_id, taken_at required' });
-        // ponytail: INSERT OR IGNORE = idempotent retry from the offline queue
-        db.prepare('INSERT OR IGNORE INTO doses (id, pill_id, taken_at) VALUES (?, ?, ?)').run(id, pill_id, taken_at);
+        const { id, pill_id, taken_at, quantity = 1 } = await readJson(req);
+        if (typeof id !== 'string' || typeof pill_id !== 'number' || !isIso(taken_at) || !isQty(quantity)) return send(res, 400, { error: 'id, pill_id, taken_at, quantity required' });
+        // ponytail: upsert on id = idempotent retry from the offline queue; a repeat tap just resends the dose with a higher quantity
+        db.prepare('INSERT INTO doses (id, pill_id, taken_at, quantity) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET quantity = excluded.quantity').run(id, pill_id, taken_at, quantity);
         return send(res, 201, {});
       }
       const dose = p.match(/^\/api\/doses\/([\w-]+)$/);
       if (m === 'PATCH' && dose) {
-        const { taken_at } = await readJson(req);
-        if (!isIso(taken_at)) return send(res, 400, { error: 'taken_at required' });
-        db.prepare('UPDATE doses SET taken_at = ? WHERE id = ?').run(taken_at, dose[1]);
+        const { taken_at, quantity } = await readJson(req);
+        if (taken_at === undefined && quantity === undefined) return send(res, 400, { error: 'taken_at or quantity required' });
+        if (taken_at !== undefined && !isIso(taken_at)) return send(res, 400, { error: 'bad taken_at' });
+        if (quantity !== undefined && !isQty(quantity)) return send(res, 400, { error: 'bad quantity' });
+        if (isIso(taken_at)) db.prepare('UPDATE doses SET taken_at = ? WHERE id = ?').run(taken_at, dose[1]);
+        if (isQty(quantity)) db.prepare('UPDATE doses SET quantity = ? WHERE id = ?').run(quantity, dose[1]);
         return send(res, 200, {});
       }
       if (m === 'DELETE' && dose) {
