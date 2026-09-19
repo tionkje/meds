@@ -159,10 +159,14 @@ function render() {
     const k = dayKey(d.taken_at);
     if (k !== curDay) { curDay = k; hist.append(el('h2', '', dayLabel(k))); }
     const row = el('div', 'dose');
-    const t = el('input'); t.type = 'time'; t.value = timeStr(d.taken_at); t.disabled = !online || isPending(d.id);
+    // ponytail: edit mode swaps the time input for a date input (max today); normal view keeps the one-tap time change
+    const t = el('input'); t.type = editing ? 'date' : 'time'; t.disabled = !online || isPending(d.id);
+    if (editing) { t.value = k; t.max = today; } else t.value = timeStr(d.taken_at);
     t.onchange = () => {
-      const [h, m] = t.value.split(':').map(Number);
-      const dt = new Date(d.taken_at); dt.setHours(h, m);
+      if (!t.value) return;
+      const dt = new Date(d.taken_at);
+      if (editing) { const [y, mo, day] = t.value.split('-').map(Number); dt.setFullYear(y, mo - 1, day); }
+      else { const [h, m] = t.value.split(':').map(Number); dt.setHours(h, m); }
       api('PATCH', `/api/doses/${d.id}`, { taken_at: dt.toISOString() }).then(refresh).catch(fail);
     };
     const qty = el('input', 'qty'); qty.type = 'number'; qty.min = 1; qty.value = d.quantity; qty.disabled = t.disabled;
