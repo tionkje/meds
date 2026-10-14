@@ -16,6 +16,7 @@ pnpm install     # dev deps only: typescript + @types/node
 pnpm start       # http://localhost:3000, db at ./data/meds.db
 pnpm test        # node --test
 pnpm check       # tsc --noEmit
+PROD_SSH=<host> pnpm pull-prod   # overwrite local db with a production snapshot
 ```
 
 ## Environment

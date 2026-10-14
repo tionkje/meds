@@ -9,6 +9,7 @@ If `AGENTS.local.md` exists, read it: it holds machine-local notes (e.g. product
 - `pnpm start`: http://localhost:3000, db at `./data/meds.db`
 - `pnpm test`: `node --test server.test.ts` with `TZ=Europe/Brussels` (CSV assertion depends on it)
 - `pnpm check`: `tsc --noEmit`
+- `PROD_SSH=<host> pnpm pull-prod`: overwrite local db with a production snapshot (`scripts/pull-prod-db.sh`, runs `VACUUM INTO` inside the `meds` container)
 - CI (`.github/workflows/ci.yml`) runs `check` + `test`, then pushes `ghcr.io/tionkje/meds:latest` on push to `main`
 
 ## Stack constraints
