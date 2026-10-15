@@ -103,8 +103,8 @@ export function createApp(db: DatabaseSync): http.Server {
       if (m === 'POST' && p === '/api/doses') {
         const { id, pill_id, taken_at, quantity = 1 } = await readJson(req);
         if (typeof id !== 'string' || typeof pill_id !== 'number' || !isIso(taken_at) || !isQty(quantity)) return send(res, 400, { error: 'id, pill_id, taken_at, quantity required' });
-        // ponytail: upsert on id = idempotent retry from the offline queue; a repeat tap just resends the dose with a higher quantity
-        db.prepare('INSERT INTO doses (id, pill_id, taken_at, quantity) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET quantity = excluded.quantity').run(id, pill_id, taken_at, quantity);
+        // ponytail: upsert on id = idempotent retry from the offline queue; the queue always carries the full dose, so a repeat tap or an offline edit just resends it
+        db.prepare('INSERT INTO doses (id, pill_id, taken_at, quantity) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET taken_at = excluded.taken_at, quantity = excluded.quantity').run(id, pill_id, taken_at, quantity);
         return send(res, 201, {});
       }
       const dose = p.match(/^\/api\/doses\/([\w-]+)$/);

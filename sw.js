@@ -1,5 +1,5 @@
 // ponytail: stale-while-revalidate for the shell, network-only for /api. Bump VERSION to drop old caches.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const SHELL = ['/', '/manifest.json', '/icon.svg'];
 
 self.addEventListener('install', (e) => {

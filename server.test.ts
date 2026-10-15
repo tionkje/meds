@@ -32,6 +32,8 @@ test('pill + dose flow, idempotent dose, rename follows history, csv', async () 
   assert.equal((await state()).doses[0].quantity, 1);
   await call('POST', '/api/doses', { ...dose, quantity: 2 }); // repeat tap within merge window = same id, higher quantity
   assert.equal((await state()).doses[0].quantity, 2);
+  await call('POST', '/api/doses', { ...dose, taken_at: '2026-09-16T10:15:00.000Z', quantity: 2 }); // offline time edit of a queued dose
+  assert.equal((await state()).doses[0].taken_at, '2026-09-16T10:15:00.000Z');
   assert.equal((await call('POST', '/api/doses', { id: 'x', pill_id: id, taken_at: 'nope' })).status, 400);
   assert.equal((await call('POST', '/api/doses', { ...dose, quantity: 0 })).status, 400);
   assert.equal((await call('PATCH', '/api/doses/uuid-1', {})).status, 400);
@@ -49,5 +51,6 @@ test('pill + dose flow, idempotent dose, rename follows history, csv', async () 
 
   await call('DELETE', '/api/doses/uuid-1');
   assert.equal((await state()).doses.length, 0);
+  assert.equal((await call('DELETE', '/api/doses/never-synced')).status, 200); // queued delete of a dose the server never got
   assert.equal((await call('GET', '/nope')).status, 404);
 });
