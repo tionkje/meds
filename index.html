@@ -20,6 +20,7 @@
   .pill { text-align: left; padding: 16px; font-size: 1.15rem; display: flex; justify-content: space-between; align-items: baseline; gap: 10px; min-height: 64px; }
   .pill .count { font-size: 1.8rem; font-weight: 600; }
   .pill .times { font-size: .8rem; opacity: .7; display: block; margin-top: 4px; }
+  .pill .times b { font-weight: 600; }
   .pill:active { transform: scale(.98); }
   .edit { display: flex; gap: 8px; align-items: center; }
   input { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid color-mix(in srgb, currentColor 30%, transparent); background: transparent; color: inherit; }
@@ -67,6 +68,19 @@ const dayLabel = (key) => {
   if (key === today) return 'today';
   if (key === yest) return 'yesterday';
   return new Date(key).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' });
+};
+const agoStr = (ms) => { // just now · 45m ago · 2h 15m ago · 1d 3h ago · 12d ago
+  const m = Math.floor((Date.now() - ms) / 60e3), h = Math.floor(m / 60), d = Math.floor(h / 24);
+  if (m < 1) return 'just now';
+  if (h < 1) return `${m}m ago`;
+  if (d < 1) return m % 60 ? `${h}h ${m % 60}m ago` : `${h}h ago`;
+  if (d < 7 && h % 24) return `${d}d ${h % 24}h ago`;
+  return `${d}d ago`;
+};
+const lastStr = (ms) => { // yesterday 12:45 · Monday 21:04
+  const iso = new Date(ms).toISOString();
+  const day = dayLabel(dayKey(iso)) === 'yesterday' ? 'yesterday' : new Date(ms).toLocaleDateString([], { weekday: 'long' });
+  return `${day} ${timeStr(iso)}`;
 };
 
 async function api(method, url, body) {
@@ -135,7 +149,10 @@ function render() {
     const todays = state.doses.filter((d) => d.pill_id === p.id && dayKey(d.taken_at) === today).sort((a, b) => a.taken_at.localeCompare(b.taken_at));
     const b = el('button', 'pill');
     const left = el('span'); left.textContent = p.name;
-    const times = el('span', 'times', todays.map((d) => timeStr(d.taken_at) + (d.quantity > 1 ? ` ×${d.quantity}` : '')).join(' · ') || 'none today');
+    const last = lastUse[p.id];
+    const times = el('span', 'times');
+    if (last) times.append(el('b', '', agoStr(last)), ' · ');
+    times.append(todays.map((d) => timeStr(d.taken_at) + (d.quantity > 1 ? ` ×${d.quantity}` : '')).join(' · ') || (last ? `none today, last ${lastStr(last)}` : 'none today'));
     left.append(times);
     b.append(left, el('span', 'count', String(todays.reduce((n, d) => n + d.quantity, 0))));
     b.onclick = () => logDose(p.id);
@@ -188,6 +205,8 @@ $('showAll').onclick = (e) => { e.preventDefault(); showAll = !showAll; render()
 addEventListener('online', flush);
 addEventListener('offline', () => { setOnline(false); render(); });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') return; order = {}; flush(); });
+// ponytail: re-render keeps the "ago" text current; skipped while an input has focus so a half-typed edit isn't wiped
+setInterval(() => { if (document.visibilityState === 'visible' && !document.activeElement?.matches('input')) render(); }, 30e3);
 
 render();
 flush();
