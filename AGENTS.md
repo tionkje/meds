@@ -39,6 +39,7 @@ If `AGENTS.local.md` exists, read it: it holds machine-local notes (e.g. product
 - Offline sync: the client makes the dose `id` (`crypto.randomUUID()`) and queues full dose objects in `localStorage` (`queue`). Retries depend on the idempotent upsert, so don't break that. An unsynced dose is edited in place (state + its queue entry, `editPending`), so time/quantity/delete work offline; a delete replaces the entry with `{id, deleted: true}`, sent as `DELETE`.
 - A repeat tap on the same pill within `MERGE_MS` (10 min) bumps `quantity` on the existing dose instead of adding a new one.
 - Pill button order is frozen for each visit (`order`, reset on `visibilitychange`) so the buttons don't move while you tap.
+- History: today is always the editable dose list. Past days show a read-only 24h timeline (`timeline()`) until tapped (`openDays`). Header edit mode shows the list for every day.
 - `taken_at` is stored as an ISO UTC string. Day grouping and display happen in the browser's local time.
 - Migrations: a single hand-rolled column check in `openDb`. Switch to a versioned list when a second one is needed.
 - To add a static file, update all three: the `STATIC` map in `server.ts`, the `COPY` line in `Dockerfile`, and `SHELL` in `sw.js` if it should work offline.

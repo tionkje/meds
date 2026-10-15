@@ -1,8 +1,8 @@
 # meds
 
 Single-user, tap-to-log painkiller tracker. One big button per pill shows how many you took
-today and at what times; below it a 7-day history where each dose's time is editable and
-deletable. Works offline (service worker + localStorage queue), syncs when back online.
+today and at what times; below it a 7-day history. Past days show a 24h timeline per pill;
+tap a day to edit or delete its doses. Works offline (service worker + localStorage queue), syncs when back online.
 Runs on a home lab behind Tailscale, so no auth.
 
 ## Stack

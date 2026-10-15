@@ -32,6 +32,19 @@
   .dose .qty { width: 3.2em; text-align: center; }
   .dose .x { opacity: .6; margin-left: -6px; }
   .dose .pending { opacity: .6; font-size: .8rem; }
+  h2.day { display: flex; justify-content: space-between; align-items: center; }
+  h2.day button { text-transform: none; letter-spacing: 0; }
+  .timeline { cursor: pointer; padding-bottom: 6px; border-bottom: 1px solid color-mix(in srgb, currentColor 12%, transparent); }
+  .timeline:active { opacity: .7; }
+  .timeline .axis { position: relative; height: 1em; margin: 0 8px; font-size: .65rem; opacity: .5; }
+  .timeline .axis span { position: absolute; transform: translateX(-50%); }
+  .timeline .head { display: flex; gap: 8px; align-items: baseline; margin-top: 6px; font-size: .9rem; }
+  .timeline .name { white-space: nowrap; }
+  .timeline .times { flex: 1; font-size: .75rem; opacity: .6; text-align: right; }
+  .timeline .total { font-size: 1.1rem; min-width: 1.2em; text-align: right; }
+  .timeline .track { --grid: color-mix(in srgb, currentColor 15%, transparent); position: relative; height: 18px; margin: 3px 8px 4px; border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+    background: linear-gradient(to right, transparent calc(25% - .5px), var(--grid) 25%, transparent calc(25% + .5px), transparent calc(50% - .5px), var(--grid) 50%, transparent calc(50% + .5px), transparent calc(75% - .5px), var(--grid) 75%, transparent calc(75% + .5px)); }
+  .timeline .dot { position: absolute; top: 2px; transform: translateX(-50%); min-width: 14px; height: 14px; border-radius: 7px; background: #4c8dff; color: #fff; font-size: .6rem; line-height: 14px; text-align: center; font-weight: 700; }
   .status { font-size: .8rem; opacity: .7; }
   footer { margin: 24px 0; font-size: .85rem; display: flex; gap: 14px; justify-content: center; opacity: .8; }
   a { color: inherit; }
@@ -59,6 +72,7 @@ let editing = false;
 const MERGE_MS = 10 * 60e3; // repeat tap on the same pill within this window bumps quantity instead of adding a dose
 let order = {}; // ponytail: pill order frozen per visit so a tap doesn't reshuffle the buttons under your finger
 let showAll = false;
+let openDays = new Set(); // past days switched from the timeline to the editable list
 let online = navigator.onLine;
 
 const dayKey = (iso) => new Date(iso).toLocaleDateString('sv-SE');
@@ -182,37 +196,90 @@ function render() {
 
   const hist = $('history'); hist.replaceChildren();
   const cutoff = new Date(Date.now() - 7 * 864e5).toISOString();
-  const doses = state.doses.filter((d) => showAll || d.taken_at >= cutoff);
-  let curDay = null;
-  for (const d of doses) {
+  const byDay = new Map();
+  for (const d of state.doses) {
+    if (!showAll && d.taken_at < cutoff) continue;
     const k = dayKey(d.taken_at);
-    if (k !== curDay) { curDay = k; hist.append(el('h2', '', dayLabel(k))); }
-    const row = el('div', 'dose');
-    // ponytail: edit mode swaps the time input for a date input (max today); normal view keeps the one-tap time change
-    const pending = isPending(d.id);
-    const update = (change) => pending ? editPending(d, change) : api('PATCH', `/api/doses/${d.id}`, change).then(refresh).catch(fail);
-    const t = el('input'); t.type = editing ? 'date' : 'time'; t.disabled = !online && !pending;
-    if (editing) { t.value = k; t.max = today; } else t.value = timeStr(d.taken_at);
-    t.onchange = () => {
-      if (!t.value) return;
-      const dt = new Date(d.taken_at);
-      if (editing) { const [y, mo, day] = t.value.split('-').map(Number); dt.setFullYear(y, mo - 1, day); }
-      else { const [h, m] = t.value.split(':').map(Number); dt.setHours(h, m); }
-      update({ taken_at: dt.toISOString() });
-    };
-    const qty = el('input', 'qty'); qty.type = 'number'; qty.min = 1; qty.value = d.quantity; qty.disabled = t.disabled;
-    qty.onchange = () => {
-      const n = Number(qty.value);
-      if (!Number.isInteger(n) || n < 1) return render(); // a queued bad value would 400 and block the queue forever
-      update({ quantity: n });
-    };
-    const name = el('span', 'name', pillById[d.pill_id]?.name ?? '?');
-    if (pending) name.append(' ', el('span', 'pending', '(not synced)'));
-    const del = el('button', 'small', 'delete'); del.disabled = t.disabled;
-    del.onclick = () => pending ? editPending(d, null) : api('DELETE', `/api/doses/${d.id}`).then(refresh).catch(fail);
-    row.append(t, qty, el('span', 'x', '×'), name, del); hist.append(row);
+    if (!byDay.has(k)) byDay.set(k, []);
+    byDay.get(k).push(d);
+  }
+  for (const [k, dayDoses] of byDay) {
+    const h = el('h2', 'day', dayLabel(k)); hist.append(h);
+    // ponytail: past days show a read-only timeline; tap it to get the editable list (today and edit mode always get the list)
+    if (k === today || editing || openDays.has(k)) {
+      if (k !== today && !editing) {
+        const done = el('button', 'small', 'done');
+        done.onclick = () => { openDays.delete(k); render(); };
+        h.append(done);
+      }
+      for (const d of dayDoses) hist.append(doseRow(d, k, today, pillById));
+      continue;
+    }
+    const tl = timeline(dayDoses, pillById);
+    tl.onclick = () => { openDays.add(k); render(); };
+    hist.append(tl);
   }
   $('showAll').textContent = showAll ? 'show last 7 days' : 'show all';
+}
+
+function doseRow(d, k, today, pillById) {
+  const row = el('div', 'dose');
+  // ponytail: edit mode swaps the time input for a date input (max today); normal view keeps the one-tap time change
+  const pending = isPending(d.id);
+  const update = (change) => pending ? editPending(d, change) : api('PATCH', `/api/doses/${d.id}`, change).then(refresh).catch(fail);
+  const t = el('input'); t.type = editing ? 'date' : 'time'; t.disabled = !online && !pending;
+  if (editing) { t.value = k; t.max = today; } else t.value = timeStr(d.taken_at);
+  t.onchange = () => {
+    if (!t.value) return;
+    const dt = new Date(d.taken_at);
+    if (editing) { const [y, mo, day] = t.value.split('-').map(Number); dt.setFullYear(y, mo - 1, day); }
+    else { const [h, m] = t.value.split(':').map(Number); dt.setHours(h, m); }
+    update({ taken_at: dt.toISOString() });
+  };
+  const qty = el('input', 'qty'); qty.type = 'number'; qty.min = 1; qty.value = d.quantity; qty.disabled = t.disabled;
+  qty.onchange = () => {
+    const n = Number(qty.value);
+    if (!Number.isInteger(n) || n < 1) return render(); // a queued bad value would 400 and block the queue forever
+    update({ quantity: n });
+  };
+  const name = el('span', 'name', pillById[d.pill_id]?.name ?? '?');
+  if (pending) name.append(' ', el('span', 'pending', '(not synced)'));
+  const del = el('button', 'small', 'delete'); del.disabled = t.disabled;
+  del.onclick = () => pending ? editPending(d, null) : api('DELETE', `/api/doses/${d.id}`).then(refresh).catch(fail);
+  row.append(t, qty, el('span', 'x', '×'), name, del);
+  return row;
+}
+
+// one row per pill (button order): name, times, day total, and a 24h track with a dot per dose (number = quantity > 1)
+function timeline(dayDoses, pillById) {
+  const byPill = new Map();
+  for (const d of [...dayDoses].reverse()) {
+    if (!byPill.has(d.pill_id)) byPill.set(d.pill_id, []);
+    byPill.get(d.pill_id).push(d);
+  }
+  const wrap = el('div', 'timeline');
+  const axis = el('div', 'axis');
+  for (const h of [0, 6, 12, 18, 24]) { const s = el('span', '', String(h).padStart(2, '0')); s.style.left = `${h / 24 * 100}%`; axis.append(s); }
+  wrap.append(axis);
+  const pillIds = [...byPill.keys()].sort((a, b) => (order[b] ?? 0) - (order[a] ?? 0));
+  for (const id of pillIds) {
+    const ds = byPill.get(id);
+    const head = el('div', 'head');
+    head.append(
+      el('span', 'name', pillById[id]?.name ?? '?'),
+      el('span', 'times', ds.map((d) => timeStr(d.taken_at) + (d.quantity > 1 ? ` ×${d.quantity}` : '')).join(' · ')),
+      el('b', 'total', String(ds.reduce((n, d) => n + d.quantity, 0))),
+    );
+    const track = el('div', 'track');
+    for (const d of ds) {
+      const t = new Date(d.taken_at);
+      const dot = el('span', 'dot', d.quantity > 1 ? String(d.quantity) : '');
+      dot.style.left = `${(t.getHours() * 60 + t.getMinutes()) / 1440 * 100}%`;
+      track.append(dot);
+    }
+    wrap.append(head, track);
+  }
+  return wrap;
 }
 
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
