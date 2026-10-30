@@ -45,6 +45,19 @@
   .timeline .track { --grid: color-mix(in srgb, currentColor 15%, transparent); position: relative; height: 18px; margin: 3px 8px 4px; border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
     background: linear-gradient(to right, transparent calc(25% - .5px), var(--grid) 25%, transparent calc(25% + .5px), transparent calc(50% - .5px), var(--grid) 50%, transparent calc(50% + .5px), transparent calc(75% - .5px), var(--grid) 75%, transparent calc(75% + .5px)); }
   .timeline .dot { position: absolute; top: 2px; transform: translateX(-50%); min-width: 14px; height: 14px; border-radius: 7px; background: #4c8dff; color: #fff; font-size: .6rem; line-height: 14px; text-align: center; font-weight: 700; }
+  .history-filter { margin: 22px 0 8px; padding-top: 14px; border-top: 1px solid color-mix(in srgb, currentColor 16%, transparent); }
+  .filter-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 9px; }
+  .filter-heading h2 { margin: 0; font-size: .7rem; opacity: .65; }
+  .filter-clear { border: 0; background: transparent; padding: 4px 0 4px 8px; border-radius: 3px; font-size: .75rem; color: light-dark(#205dc5, #92b7ff); }
+  .filter-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .filter-chip { padding: 5px 10px; min-height: 30px; border-radius: 20px; font-size: .78rem; background: transparent; line-height: 1.3; }
+  .filter-chip[aria-pressed=true] { background: light-dark(#e7efff, #243a60); color: light-dark(#174b9f, #c4d9ff); border-color: #4c8dff; }
+  .filter-chip[aria-pressed=true]::before { content: '✓ '; }
+  .filter-more { padding: 5px 10px; min-height: 30px; border-radius: 20px; border-style: dashed; background: transparent; font-size: .75rem; color: light-dark(#205dc5, #92b7ff); }
+  .filter-older { margin-top: 6px; }
+  .filter-older[hidden] { display: none; }
+  .filter-empty { margin: 20px 0; padding: 16px; text-align: center; font-size: .85rem; border: 1px dashed color-mix(in srgb, currentColor 22%, transparent); border-radius: 10px; opacity: .7; }
+  .history-filter button:focus-visible { outline: 2px solid #4c8dff; outline-offset: 3px; }
   .status { font-size: .8rem; opacity: .7; }
   footer { margin: 24px 0; font-size: .85rem; display: flex; gap: 14px; justify-content: center; opacity: .8; }
   a { color: inherit; }
@@ -57,6 +70,8 @@
   <button class="small" id="toggleEdit">edit</button>
 </header>
 <div class="pills" id="pills"></div>
+<div id="today"></div>
+<section id="historyFilter" class="history-filter" aria-label="Past days medication filter"></section>
 <div id="history"></div>
 <footer><a href="/export.csv">export csv</a><a href="#" id="showAll">show all</a></footer>
 
@@ -73,6 +88,8 @@ const MERGE_MS = 10 * 60e3; // repeat tap on the same pill within this window bu
 let order = {}; // ponytail: pill order frozen per visit so a tap doesn't reshuffle the buttons under your finger
 let showAll = false;
 let openDays = new Set(); // past days switched from the timeline to the editable list
+const selectedPills = new Set();
+let showOlderPills = false;
 let online = navigator.onLine;
 
 const dayKey = (iso) => new Date(iso).toLocaleDateString('sv-SE');
@@ -195,16 +212,19 @@ function render() {
   $('toggleEdit').disabled = !online;
 
   const hist = $('history'); hist.replaceChildren();
+  const todayHist = $('today'); todayHist.replaceChildren();
   const cutoff = new Date(Date.now() - 7 * 864e5).toISOString();
   const byDay = new Map();
   for (const d of state.doses) {
     if (!showAll && d.taken_at < cutoff) continue;
     const k = dayKey(d.taken_at);
+    if (k !== today && selectedPills.size && !selectedPills.has(d.pill_id)) continue;
     if (!byDay.has(k)) byDay.set(k, []);
     byDay.get(k).push(d);
   }
   for (const [k, dayDoses] of byDay) {
-    const h = el('h2', 'day', dayLabel(k)); hist.append(h);
+    const container = k === today ? todayHist : hist;
+    const h = el('h2', 'day', dayLabel(k)); container.append(h);
     // ponytail: past days show a read-only timeline; tap it to get the editable list (today and edit mode always get the list)
     if (k === today || editing || openDays.has(k)) {
       if (k !== today && !editing) {
@@ -212,14 +232,68 @@ function render() {
         done.onclick = () => { openDays.delete(k); render(); };
         h.append(done);
       }
-      for (const d of dayDoses) hist.append(doseRow(d, k, today, pillById));
+      for (const d of dayDoses) container.append(doseRow(d, k, today, pillById));
       continue;
     }
     const tl = timeline(dayDoses, pillById);
     tl.onclick = () => { openDays.add(k); render(); };
-    hist.append(tl);
+    container.append(tl);
   }
+  if (!hist.hasChildNodes()) hist.append(el('p', 'filter-empty', selectedPills.size ? 'No matching doses in this date range.' : 'No past doses in this date range.'));
   $('showAll').textContent = showAll ? 'show last 7 days' : 'show all';
+  renderHistoryFilter(lastUse, Date.parse(cutoff));
+}
+
+function renderHistoryFilter(lastUse, cutoff) {
+  const wrap = $('historyFilter');
+  const focusId = wrap.contains(document.activeElement) ? document.activeElement.id : null;
+  wrap.replaceChildren();
+  wrap.hidden = !state.pills.length;
+  const heading = el('div', 'filter-heading');
+  heading.append(el('h2', '', 'Past days'));
+  if (selectedPills.size) {
+    const clear = el('button', 'filter-clear', 'Clear'); clear.id = 'filter-clear';
+    clear.onclick = () => { selectedPills.clear(); render(); };
+    heading.append(clear);
+  }
+  const group = el('div');
+  group.setAttribute('role', 'group');
+  group.setAttribute('aria-label', 'Filter past days by medication');
+  const recent = el('div', 'filter-chips');
+  const older = el('div', 'filter-chips filter-older'); older.id = 'filter-older';
+  let olderCount = 0, olderSelected = 0;
+  // ponytail: include hidden medications so their old doses can still be filtered; More uses the same 7-day cutoff as history.
+  const pills = [...state.pills].sort((a, b) => (lastUse[b.id] ?? 0) - (lastUse[a.id] ?? 0));
+  for (const pill of pills) {
+    const chip = el('button', 'filter-chip', pill.name); chip.id = `filter-pill-${pill.id}`;
+    chip.setAttribute('aria-pressed', String(selectedPills.has(pill.id)));
+    chip.onclick = () => {
+      if (selectedPills.has(pill.id)) selectedPills.delete(pill.id); else selectedPills.add(pill.id);
+      render();
+    };
+    if ((lastUse[pill.id] ?? 0) >= cutoff) recent.append(chip);
+    else { older.append(chip); olderCount++; if (selectedPills.has(pill.id)) olderSelected++; }
+  }
+  if (olderCount) {
+    const more = el('button', 'filter-more'); more.id = 'filter-more';
+    more.setAttribute('aria-controls', older.id);
+    const updateMore = () => {
+      older.hidden = !showOlderPills;
+      more.setAttribute('aria-expanded', String(showOlderPills));
+      more.textContent = showOlderPills ? 'Less' : `More (${olderCount})${olderSelected ? ` · ${olderSelected} selected` : ''}`;
+    };
+    more.onclick = () => { showOlderPills = !showOlderPills; updateMore(); };
+    updateMore();
+    recent.append(more);
+  }
+  group.append(recent);
+  if (olderCount) group.append(older);
+  wrap.append(heading, group);
+  if (focusId) {
+    const focused = $(focusId);
+    const target = focused && !focused.closest('[hidden]') ? focused : recent.querySelector('button');
+    target?.focus({ preventScroll: true });
+  }
 }
 
 function doseRow(d, k, today, pillById) {

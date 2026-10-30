@@ -5,6 +5,9 @@ today and at what times; below it a 7-day history. Past days show a 24h timeline
 tap a day to edit or delete its doses. Works offline (service worker + localStorage queue), syncs when back online.
 Runs on a home lab behind Tailscale, so no auth.
 
+Filter past days with compact medication chips, ordered by last use. No selection shows everything;
+**More** reveals medications unused in the last 7 days. Today's doses always stay visible.
+
 ## Stack
 
 Node 24 (native TS, `node:sqlite`), vanilla HTML/JS. Zero runtime dependencies. No build step.
