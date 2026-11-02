@@ -58,6 +58,11 @@
   .filter-older[hidden] { display: none; }
   .filter-empty { margin: 20px 0; padding: 16px; text-align: center; font-size: .85rem; border: 1px dashed color-mix(in srgb, currentColor 22%, transparent); border-radius: 10px; opacity: .7; }
   .history-filter button:focus-visible { outline: 2px solid #4c8dff; outline-offset: 3px; }
+  .history-gap { --gap-ink: light-dark(#ba5800, #ffb36b); display: grid; gap: 7px; margin: 18px 0 8px; padding: 4px 0; }
+  .history-gap:focus-visible { outline: 2px solid var(--gap-ink); outline-offset: 5px; }
+  .gap-mark { display: block; height: 2px; background: var(--gap-ink); border-radius: 2px; }
+  .gap-mark[data-unit="week"] { --gap-ink: light-dark(#7850b5, #c5a5ff); height: 5px; margin-block: 4px; }
+  .gap-mark[data-unit="month"] { --gap-ink: light-dark(#087c70, #67d8bf); height: 8px; margin-block: 4px; }
   .status { font-size: .8rem; opacity: .7; }
   footer { margin: 24px 0; font-size: .85rem; display: flex; gap: 14px; justify-content: center; opacity: .8; }
   a { color: inherit; }
@@ -224,7 +229,7 @@ function render() {
   }
   for (const [k, dayDoses] of byDay) {
     const container = k === today ? todayHist : hist;
-    const h = el('h2', 'day', dayLabel(k)); container.append(h);
+    const h = el('h2', 'day', dayLabel(k)); h.dataset.day = k; container.append(h);
     // ponytail: past days show a read-only timeline; tap it to get the editable list (today and edit mode always get the list)
     if (k === today || editing || openDays.has(k)) {
       if (k !== today && !editing) {
@@ -240,8 +245,97 @@ function render() {
     container.append(tl);
   }
   if (!hist.hasChildNodes()) hist.append(el('p', 'filter-empty', selectedPills.size ? 'No matching doses in this date range.' : 'No past doses in this date range.'));
+  renderHistoryGaps(byDay, today, cutoff);
   $('showAll').textContent = showAll ? 'show last 7 days' : 'show all';
   renderHistoryFilter(lastUse, Date.parse(cutoff));
+}
+
+// ponytail: calendar ordinals count local date labels, not elapsed hours across DST.
+function dayOrdinal(key) {
+  const [year, month, day] = key.split('-').map(Number);
+  return Date.UTC(year, month - 1, day) / 864e5;
+}
+
+function ordinalDay(ordinal) {
+  return new Date(ordinal * 864e5).toISOString().slice(0, 10);
+}
+
+function gapPeriods(days) {
+  const byMonth = new Map();
+  for (const day of days) {
+    const month = day.slice(0, 7);
+    if (!byMonth.has(month)) byMonth.set(month, []);
+    byMonth.get(month).push(day);
+  }
+  const fullMonths = new Map([...byMonth].filter(([key, dates]) => {
+    const [year, month] = key.split('-').map(Number);
+    return dates.length === new Date(Date.UTC(year, month, 0)).getUTCDate();
+  }));
+  const periods = [];
+  for (let i = 0; i < days.length;) {
+    const day = days[i];
+    let unit = 'day', dates = [day];
+    const month = fullMonths.get(day.slice(0, 7));
+    if (month) { unit = 'month'; dates = month; }
+    else {
+      const ordinal = dayOrdinal(day);
+      const week = days.slice(i, i + 7);
+      // ponytail: reserve complete months first; a cross-month week must not consume part of one.
+      if (new Date(ordinal * 864e5).getUTCDay() === 0 && week.length === 7 && week.every((date, offset) => dayOrdinal(date) === ordinal - offset && !fullMonths.has(date.slice(0, 7)))) {
+        unit = 'week'; dates = week;
+      }
+    }
+    periods.push({ unit, start: dates.at(-1), end: dates[0], days: dates });
+    i += dates.length;
+  }
+  return periods;
+}
+
+function historyGap(days) {
+  const gap = el('div', 'history-gap');
+  const scope = selectedPills.size ? 'selected medicines' : 'any medicine';
+  const dates = days.length === 1 ? days[0] : `${days.at(-1)} through ${days[0]}`;
+  gap.title = `${days.length} ${days.length === 1 ? 'day' : 'days'} with no doses logged for ${scope}: ${dates}`;
+  gap.setAttribute('role', 'img');
+  gap.setAttribute('aria-label', gap.title);
+  gap.tabIndex = 0;
+  for (const period of gapPeriods(days)) {
+    const mark = el('span', 'gap-mark');
+    mark.dataset.unit = period.unit;
+    const label = period.unit === 'day' ? '1 day' : `Full ${period.unit}`;
+    const range = period.start === period.end ? period.start : `${period.start} through ${period.end}`;
+    mark.title = `${label} with no doses logged for ${scope}: ${range} (${period.days.length} ${period.days.length === 1 ? 'day' : 'days'})`;
+    mark.setAttribute('aria-hidden', 'true');
+    gap.append(mark);
+  }
+  return gap;
+}
+
+function renderHistoryGaps(byDay, today, cutoff) {
+  const history = $('history');
+  const pastDays = [...byDay.keys()].filter((key) => key < today).sort().reverse();
+  const allPastDays = state.doses.map((dose) => dayKey(dose.taken_at)).filter((key) => key < today).sort();
+  const start = showAll ? (allPastDays[0] ?? today) : dayKey(cutoff);
+  // ponytail: a dose before the rolling cutoff still occupies its calendar day; never mark that day empty.
+  const occupied = new Set(state.doses.filter((dose) => !selectedPills.size || selectedPills.has(dose.pill_id)).map((dose) => dayKey(dose.taken_at)));
+  let previous = dayOrdinal(today);
+  for (const key of pastDays) {
+    const days = [];
+    for (let day = previous - 1; day > dayOrdinal(key); day--) {
+      const date = ordinalDay(day);
+      if (date >= start && !occupied.has(date)) days.push(date);
+    }
+    if (days.length) history.insertBefore(historyGap(days), history.querySelector(`[data-day="${key}"]`));
+    previous = dayOrdinal(key);
+  }
+  if (!pastDays.length) {
+    const days = [];
+    for (let day = previous - 1; day >= dayOrdinal(start); day--) {
+      const date = ordinalDay(day);
+      if (!occupied.has(date)) days.push(date);
+    }
+    if (days.length) history.prepend(historyGap(days));
+  }
 }
 
 function renderHistoryFilter(lastUse, cutoff) {
